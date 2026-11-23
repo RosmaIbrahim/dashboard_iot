@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UAS-IOT</title>
+  <!-- Tailwind CSS & MQTT.js via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+</head>
+<body class="bg-slate-900 text-white min-h-screen p-6 font-sans">
+
+  <div class="max-w-3xl mx-auto space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center bg-slate-800 p-4 rounded-xl border border-slate-700">
+      <div>
+        <h1 class="text-2xl font-bold text-sky-400">Dashboard</h1>
+        <p class="text-xs text-slate-400">Smart Air Quality Monitor</p>
+      </div>
+      <div id="status-badge" class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-600 text-gray-200">
+        MENYAMBUNG...
+      </div>
+    </div>
+
+    <!-- Cards Data Sensor -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 text-center">
+        <span class="text-slate-400 text-sm">Suhu</span>
+        <div id="val-suhu" class="text-3xl font-bold my-2 text-amber-400">-- °C</div>
+      </div>
+      <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 text-center">
+        <span class="text-slate-400 text-sm">Kelembapan</span>
+        <div id="val-hum" class="text-3xl font-bold my-2 text-blue-400">-- %</div>
+      </div>
+      <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 text-center">
+        <span class="text-slate-400 text-sm">Indeks Polusi</span>
+        <div id="val-ppm" class="text-3xl font-bold my-2 text-emerald-400">--</div>
+      </div>
+    </div>
+
+    <!-- Status Udara & Kipas -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+        <span class="text-slate-400 text-sm">Status Udara</span>
+        <div id="val-status" class="text-2xl font-bold mt-2 text-gray-300">UNKNOWN</div>
+        <div class="flex items-center gap-2 mt-3">
+          <div id="led-hijau" class="w-4 h-4 rounded-full bg-slate-600"></div>
+          <div id="led-merah" class="w-4 h-4 rounded-full bg-slate-600"></div>
+          <span class="text-xs text-slate-400">Indikator LED</span>
+        </div>
+      </div>
+      <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+        <span class="text-slate-400 text-sm">Status Kipas & Mode</span>
+        <div class="flex justify-between items-center mt-2">
+          <div id="val-kipas" class="text-xl font-bold text-gray-300">KIPAS: --</div>
+          <div id="val-mode" class="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">MODE: --</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel Kontrol Kipas -->
+    <div class="bg-slate-800 p-5 rounded-xl border border-slate-700">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Kontrol Kipas Manual / Auto</h3>
+      <div class="grid grid-cols-3 gap-3">
+        <button onclick="sendCmd('AUTO')" class="bg-indigo-600 hover:bg-indigo-500 py-2 rounded-lg font-bold text-sm transition">AUTO</button>
+        <button onclick="sendCmd('ON')" class="bg-emerald-600 hover:bg-emerald-500 py-2 rounded-lg font-bold text-sm transition">ON</button>
+        <button onclick="sendCmd('OFF')" class="bg-rose-600 hover:bg-rose-500 py-2 rounded-lg font-bold text-sm transition">OFF</button>
+      </div>
+    </div>
+
+    <!-- Panel Riwayat / Log Data Sensor -->
+    <div class="bg-slate-800 p-5 rounded-xl border border-slate-700">
+      <div class="flex justify-between items-center mb-3">
+        <div>
+          <h3 class="text-sm font-semibold text-slate-300">Riwayat Data Sensor</h3>
+          <p class="text-xs text-slate-400">Menampilkan maksimal 50 log terbaru</p>
+        </div>
+        <button onclick="hapusHistory()" class="bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/40 px-3 py-1.5 rounded-lg text-xs font-semibold transition">
+          Hapus Riwayat
+        </button>
+      </div>
+
+      <div class="overflow-x-auto max-h-64 overflow-y-auto rounded-lg border border-slate-700">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-700/70 text-slate-300 sticky top-0">
+            <tr>
+              <th class="p-2.5">Waktu</th>
+              <th class="p-2.5">Suhu</th>
+              <th class="p-2.5">Kelembapan</th>
+              <th class="p-2.5">Polusi (PPM)</th>
+              <th class="p-2.5">Status</th>
+              <th class="p-2.5">Kipas</th>
+            </tr>
+          </thead>
+          <tbody id="history-body" class="divide-y divide-slate-700/60 bg-slate-800/40">
+            <tr>
+              <td colspan="6" class="p-4 text-center text-slate-500">Belum ada data masuk...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Topic (wajib sama dengan ESP32, ganti kelompokX jika perlu)
+    const TOPIC_DATA   = "uas-iot-kelompokX/air/data";
+    const TOPIC_KIPAS  = "uas-iot-kelompokX/air/kipas/set";
+    const TOPIC_STATUS = "uas-iot-kelompokX/air/status";
+
+    // WebSocket aman, port 8884
+    const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+      clientId: 'web-' + Math.random().toString(16).slice(2, 8)
+    });
+
+    const badge = document.getElementById('status-badge');
+    const historyBody = document.getElementById('history-body');
+    const STORAGE_KEY = 'iot_air_history';
+
+    let brokerTersambung = false;
+    let alatOnline = false;
+    let dataTerakhir = 0;
+
+    // Ambil riwayat tersimpan dari browser saat halaman dibuka
+    let riwayatData = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+
+    const warnaStatus = {
+      AMAN: 'text-emerald-400',
+      WASPADA: 'text-amber-400',
+      PEMANASAN: 'text-amber-400',
+      BAHAYA: 'text-rose-500'
+    };
+
+    const badgeStatusTabel = {
+      AMAN: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
+      WASPADA: 'bg-amber-500/20 text-amber-400 border border-amber-500/30',
+      PEMANASAN: 'bg-amber-500/20 text-amber-400 border border-amber-500/30',
+      BAHAYA: 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+    };
+
+    function renderHistory() {
+      if (riwayatData.length === 0) {
+        historyBody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-slate-500">Belum ada data masuk...</td></tr>';
+        return;
+      }
+
+      historyBody.innerHTML = riwayatData.map(item => `
+        <tr class="hover:bg-slate-700/30 transition">
+          <td class="p-2.5 text-slate-400 font-mono">${item.waktu}</td>
+          <td class="p-2.5 text-amber-400 font-semibold">${item.suhu} °C</td>
+          <td class="p-2.5 text-blue-400 font-semibold">${item.kelembapan} %</td>
+          <td class="p-2.5 text-emerald-400 font-semibold">${item.ppm}</td>
+          <td class="p-2.5">
+            <span class="px-2 py-0.5 rounded text-[11px] font-bold ${badgeStatusTabel[item.status] || 'bg-slate-700 text-slate-300'}">
+              ${item.status}
+            </span>
+          </td>
+          <td class="p-2.5 text-slate-300">${item.kipas}</td>
+        </tr>
+      `).join('');
+    }
+
+    function tambahHistory(data) {
+      const sekarang = new Date();
+      const waktuStr = sekarang.toLocaleTimeString('id-ID', { hour12: false });
+
+      riwayatData.unshift({
+        waktu: waktuStr,
+        suhu: data.suhu,
+        kelembapan: data.kelembapan,
+        ppm: data.ppm,
+        status: data.status,
+        kipas: data.kipas
+      });
+
+      // Batasi maksimal 50 baris agar tidak memberatkan browser
+      if (riwayatData.length > 50) riwayatData.pop();
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(riwayatData));
+      renderHistory();
+    }
+
+    function hapusHistory() {
+      if (riwayatData.length === 0) return;
+      riwayatData = [];
+      localStorage.removeItem(STORAGE_KEY);
+      renderHistory();
+    }
+
+    function setBadge(teks, kelas) {
+      badge.innerText = teks;
+      badge.className = 'px-3 py-1 rounded-full text-xs font-semibold ' + kelas;
+    }
+
+    function updateBadge() {
+      if (!brokerTersambung) setBadge('BROKER TERPUTUS', 'bg-gray-600 text-gray-200');
+      else if (!alatOnline) setBadge('ALAT OFFLINE', 'bg-rose-500 text-white');
+      else if (dataTerakhir && Date.now() - dataTerakhir > 10000) setBadge('DATA TERHENTI', 'bg-amber-500 text-white');
+      else setBadge('ALAT ONLINE', 'bg-emerald-500 text-white');
+    }
+
+    client.on('connect', () => {
+      brokerTersambung = true;
+      client.subscribe(TOPIC_DATA);
+      client.subscribe(TOPIC_STATUS);
+      updateBadge();
+    });
+
+    client.on('close', () => { brokerTersambung = false; updateBadge(); });
+    client.on('offline', () => { brokerTersambung = false; updateBadge(); });
+    client.on('error', (e) => console.error('MQTT error:', e));
+
+    // Menerima pesan dari ESP32
+    client.on('message', (topic, message) => {
+      const text = message.toString();
+
+      if (topic === TOPIC_STATUS) {
+        alatOnline = (text === 'online');
+        updateBadge();
+      }
+
+      if (topic === TOPIC_DATA) {
+        try {
+          const data = JSON.parse(text);
+          dataTerakhir = Date.now();
+          alatOnline = true;
+
+          document.getElementById('val-suhu').innerText = data.suhu + ' °C';
+          document.getElementById('val-hum').innerText = data.kelembapan + ' %';
+          document.getElementById('val-ppm').innerText = data.ppm;
+
+          const st = document.getElementById('val-status');
+          st.innerText = data.status;
+          st.className = 'text-2xl font-bold mt-2 ' + (warnaStatus[data.status] || 'text-gray-300');
+
+          // Indikator LED di dashboard
+          const bahaya = (data.status === 'BAHAYA');
+          document.getElementById('led-hijau').className = 'w-4 h-4 rounded-full ' + (bahaya ? 'bg-slate-600' : 'bg-emerald-400');
+          document.getElementById('led-merah').className = 'w-4 h-4 rounded-full ' + (bahaya ? 'bg-rose-500' : 'bg-slate-600');
+
+          document.getElementById('val-kipas').innerText = 'KIPAS: ' + data.kipas;
+          document.getElementById('val-mode').innerText = 'MODE: ' + data.mode;
+
+          // Simpan ke tabel riwayat
+          tambahHistory(data);
+          updateBadge();
+        } catch (e) {
+          console.error('Format JSON salah', e);
+        }
+      }
+    });
+
+    // Tampilkan riwayat lama saat halaman pertama kali dibuka
+    renderHistory();
+
+    // Cek tiap 5 detik apakah data masih masuk
+    setInterval(updateBadge, 5000);
+
+    // Kirim perintah ON / OFF / AUTO
+    function sendCmd(cmd) {
+      client.publish(TOPIC_KIPAS, cmd);
+    }
+  </script>
+</body>
+</html>
